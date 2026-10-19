@@ -1,0 +1,32 @@
+{
+	"type": "surface",
+	"id": "masterhub-usb",
+	"name": "MasterHub USB",
+	"shortname": "MasterHub USB",
+	"description": "Use a MasterHub as a Companion surface over direct USB, without masterhubd",
+	"version": "0.1.0",
+	"license": "MIT",
+	"repository": "git+https://github.com/OpenMasterHub/openmasterhub.git",
+	"bugs": "https://github.com/OpenMasterHub/openmasterhub/issues",
+	"maintainers": [
+		{
+			"name": "OpenMasterHub"
+		}
+	],
+	"runtime": {
+		"type": "node26",
+		"api": "nodejs-ipc",
+		"apiVersion": "1.4.0",
+		"entrypoint": "../dist/main.js"
+	},
+	"manufacturer": "MasterHub",
+	"products": ["MasterHub"],
+	"keywords": ["masterhub", "usb", "hid"],
+	"usbIds": [
+		{
+			"vendorId": 9494,
+			"productIds": [502, 510, 512, 514, 516, 518]
+		}
+	],
+	"allowMultipleInstances": false
+}
