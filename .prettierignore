@@ -1,2 +1,4 @@
 package.json
+/dist
+/pkg
 /LICENSE.md

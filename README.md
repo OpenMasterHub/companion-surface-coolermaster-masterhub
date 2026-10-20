@@ -46,7 +46,7 @@ pnpm install
 pnpm --filter "companion-surface-masterhub-usb..." build
 ```
 
-- `pnpm run dev` recompiles on change while Companion's developer modules directory points at this repository.
+- `pnpm run dev` rebuilds `pkg/masterhub-usb` on every change to `src/` (unminified, inline source maps), so Companion's developer modules directory can point at `pkg/masterhub-usb` and no `.tgz` reinstall is needed. Set it once in Companion's advanced settings (developer mode, developer modules path `pkg/masterhub-usb` of this repository); Companion reloads the module when the `main.js` in there changes.
 - `pnpm run test` runs the unit tests.
 - `pnpm run lint` and `pnpm run format` for lint and formatting.
 - `pnpm run package` builds the plugin into `pkg/` for distribution.

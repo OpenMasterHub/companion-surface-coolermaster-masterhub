@@ -12,6 +12,7 @@ Every connected MasterHub module (keypad, sliders, knobs, rollers, dial, base) s
 | Dial    | the dial, row 5                               | 240×240 button image |
 | Base    | 1 cell, row 5                                 | LED color            |
 
+- The rollers does not work on mac.
 - The grid is fixed, so a missing module leaves a gap instead of moving the modules around it. The surface remembers buttons by grid position: an empty cell is still where its button lives when the module comes back.
 - Slider 1 is the leftmost slider in Companion.
 - On knob, slider, and base cells the button style's color is sent to the LED as a solid color. Animated styles (breathing, strobe, rainbow, …) are not shown on these LEDs.
