@@ -1,22 +1,31 @@
+import { count, isDebugEnabled, now, time } from './debug.js'
 import type { DaemonEvent } from './input.js'
 
 import type { HidIdentity } from './discover.js'
 import { dialInput, dialSoftwareModeFeature } from './hid/dial-report.js'
 import { PID_BASE, PID_DIAL, PID_KEYS, PID_KNOB, PID_ROLLER, PID_SLIDER } from './hid/ids.js'
-import { diffKeys, keySnapshotFromReport, releasedSnapshot, softwareModeFeature } from './hid/keys.js'
+import { CHUNK_MAX, diffKeys, keySnapshotFromReport, releasedSnapshot, softwareModeFeature } from './hid/keys.js'
 import {
 	inputPayload,
 	inputReport,
 	knobControl,
 	knobLedIndex,
 	LED_BASE,
+	looseRollerReport,
 	LED_INDEX_ALL,
 	LED_KNOB,
 	LED_SLIDER,
 } from './hid/m0.js'
 import { BacklightQueue, KeyImageQueue, LedQueue, ScreenQueue } from './hid/queue.js'
 
-const READ_TIMEOUT_MS = 50
+/**
+ * How long one read waits for input. Reads only run while a module has nothing to write, so
+ * this timeout does not slow transfers; it bounds how long `close` waits and how stale a
+ * module can be about new reports. Debug logging times each read, so it samples more finely.
+ */
+function readTimeoutMs(): number {
+	return isDebugEnabled() ? 20 : 50
+}
 const WATCH_MS = 1000
 
 export interface HidPort {
@@ -33,6 +42,14 @@ export interface HidOpener {
 interface OpenModule {
 	productId: number
 	port: HidPort
+	/** Set while this module has reports to write. */
+	writing: boolean
+	/** Resolves the read loop's wait for `writing` to clear. */
+	wake: (() => void) | null
+}
+
+function chunkCount(jpeg: Uint8Array): number {
+	return Math.ceil(jpeg.length / CHUNK_MAX)
 }
 
 export class UsbLink {
@@ -51,13 +68,15 @@ export class UsbLink {
 	private stopping = false
 	private closed = false
 	private timer: ReturnType<typeof setInterval> | null = null
+	private readonly opener: HidOpener
+	private readonly listPids: () => number[]
 	private onEvent: ((event: DaemonEvent) => void) | null = null
 	private onLost: ((error: Error) => void) | null = null
 
-	constructor(
-		private readonly opener: HidOpener,
-		private readonly listPids: () => number[],
-	) {}
+	constructor(opener: HidOpener, listPids: () => number[]) {
+		this.opener = opener
+		this.listPids = listPids
+	}
 
 	setHandlers(onEvent: (event: DaemonEvent) => void, onLost: (error: Error) => void): void {
 		this.onEvent = onEvent
@@ -69,7 +88,7 @@ export class UsbLink {
 		try {
 			for (const device of devices) {
 				const port = await this.opener.open(device.path)
-				opened.push({ productId: device.productId, port })
+				opened.push({ productId: device.productId, port, writing: false, wake: null })
 				if (device.productId === PID_KEYS) {
 					await port.sendFeatureReport(softwareModeFeature())
 				}
@@ -94,7 +113,8 @@ export class UsbLink {
 
 	start(): void {
 		for (const module of this.modules) {
-			void this.run(module)
+			void this.writeLoop(module)
+			void this.readLoop(module)
 		}
 		this.timer = setInterval(() => this.watch(), WATCH_MS)
 	}
@@ -129,15 +149,19 @@ export class UsbLink {
 	}
 
 	setKeyImage(control: number, jpeg: Uint8Array): void {
-		if (this.has(PID_KEYS)) {
-			this.keys.store(control, jpeg)
+		if (!this.has(PID_KEYS)) {
+			return
 		}
+		count('jpeg chunks', chunkCount(jpeg))
+		this.keys.store(control, jpeg)
 	}
 
 	setDialImage(jpeg: Uint8Array): void {
-		if (this.has(PID_DIAL)) {
-			this.screen.store(jpeg)
+		if (!this.has(PID_DIAL)) {
+			return
 		}
+		count('jpeg chunks', chunkCount(jpeg))
+		this.screen.store(jpeg)
 	}
 
 	setColor(controlId: string, color: { r: number; g: number; b: number }): void {
@@ -164,27 +188,82 @@ export class UsbLink {
 		return this.modules.some((module) => module.productId === productId)
 	}
 
-	private async run(module: OpenModule): Promise<void> {
+	/**
+	 * Drains every queued report back to back. A read outstanding on the same handle makes
+	 * each write wait on libuv's thread pool: a full page took 250 ms per report with one
+	 * read in flight and 1 ms per report with none. So the read loop stands down while
+	 * `writing` is set; the module sends no input during a transfer anyway. The writer only
+	 * yields when the queue is empty.
+	 */
+	private async writeLoop(module: OpenModule): Promise<void> {
 		try {
 			while (!this.stopping) {
 				const output = this.nextOutput(module.productId)
-				if (output) {
+				if (!output) {
+					module.writing = false
+					module.wake?.()
+					await this.idle()
+					continue
+				}
+				module.writing = true
+				const startedAt = now()
+				try {
 					if (output.feature) {
 						await module.port.sendFeatureReport(output.bytes)
 					} else {
 						await module.port.write(output.bytes)
 					}
+				} catch (error) {
+					count('write errors')
+					throw error
 				}
-				const report = await module.port.read(READ_TIMEOUT_MS)
+				count('flush reports')
+				time('flush ms', startedAt, 20)
+			}
+		} catch (error) {
+			if (!this.stopping) {
+				console.log(
+					`[MasterHub] pid ${module.productId}: write loop failed: ${error instanceof Error ? error.message : String(error)}`,
+				)
+				this.fail(error)
+			}
+		}
+	}
+
+	private async readLoop(module: OpenModule): Promise<void> {
+		try {
+			while (!this.stopping) {
+				if (module.writing) {
+					await this.waitUntilIdle(module)
+					continue
+				}
+				const startedAt = now()
+				const report = await module.port.read(readTimeoutMs())
 				if (report && report.length > 0) {
+					time('read ms', startedAt, 5)
 					this.onReport(module.productId, report)
 				}
 			}
 		} catch (error) {
 			if (!this.stopping) {
+				console.log(
+					`[MasterHub] pid ${module.productId}: read loop failed: ${error instanceof Error ? error.message : String(error)}`,
+				)
 				this.fail(error)
 			}
 		}
+	}
+
+	/** Yields to the event loop while there is nothing to write, so the loop cannot spin. */
+	private async idle(): Promise<void> {
+		await new Promise<void>((resolve) => setImmediate(resolve))
+	}
+
+	/** Blocks the read loop until the module's writer has drained its queue. */
+	private async waitUntilIdle(module: OpenModule): Promise<void> {
+		await new Promise<void>((resolve) => {
+			module.wake = resolve
+		})
 	}
 
 	private nextOutput(productId: number): { feature: boolean; bytes: Uint8Array } | null {
@@ -228,7 +307,7 @@ export class UsbLink {
 			return
 		}
 		if (productId === PID_ROLLER) {
-			const input = inputPayload(report)
+			const input = inputPayload(report) ?? looseRollerReport(report)
 			if (input?.type !== 'rollers') {
 				return
 			}

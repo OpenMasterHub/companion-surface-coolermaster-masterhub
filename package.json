@@ -1,6 +1,6 @@
 {
 	"name": "companion-surface-coolermaster-masterhub",
-	"version": "0.1.2",
+	"version": "0.1.3",
 	"main": "dist/main.js",
 	"type": "module",
 	"scripts": {
@@ -11,7 +11,7 @@
 		"dev": "tsc -p tsconfig.build.json --watch",
 		"lint:raw": "eslint",
 		"lint": "pnpm run lint:raw .",
-		"test": "node --experimental-strip-types --import ./test-register.mjs --test src/hid/codec.spec.ts src/hid/queue.spec.ts src/discover.spec.ts src/grid.spec.ts"
+		"test": "node --experimental-strip-types --import ./test-register.mjs --test src/hid/codec.spec.ts src/hid/queue.spec.ts src/discover.spec.ts src/grid.spec.ts src/jpeg.spec.ts src/jpeg-encoder.spec.ts src/session.spec.ts"
 	},
 	"license": "MIT",
 	"repository": {

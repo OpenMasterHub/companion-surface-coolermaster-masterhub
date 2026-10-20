@@ -45,9 +45,10 @@ pnpm --filter "companion-surface-masterhub-usb..." build
 ```
 
 - `pnpm run dev` recompiles on change while Companion's developer modules directory points at this repository.
-- `pnpm test` runs the unit tests.
+- `pnpm run test` runs the unit tests.
 - `pnpm run lint` and `pnpm run format` for lint and formatting.
 - `pnpm run package` builds the plugin into `pkg/` for distribution.
+- Start Companion with `MASTERHUB_DEBUG=1` to log draw, JPEG encoding, and HID flush timings once per second. The lines go to Companion's log file and the module's process output; with debug off, the plugin logs nothing except failures.
 
 Keep OpenDeck closed while using the surface.
 

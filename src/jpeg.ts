@@ -1,9 +1,17 @@
 import { encode as encodeJpeg } from 'jpeg-js'
 
+import { count, now, time } from './debug.js'
+
 /** masterhubd rejects a JPEG larger than this. */
 export const MAX_JPEG_BYTES = 64 * 1024
 
 const blackFrames = new Map<string, Buffer>()
+
+export interface JpegFrame {
+	rgb: Uint8Array
+	width: number
+	height: number
+}
 
 export function encodeRgbJpeg(rgb: Uint8Array, width: number, height: number): Buffer {
 	const pixels = width * height
@@ -38,4 +46,31 @@ export function blackJpeg(width: number, height: number): Buffer {
 	const encoded = encodeRgbJpeg(new Uint8Array(width * height * 3), width, height)
 	blackFrames.set(key, encoded)
 	return encoded
+}
+
+/**
+ * Encodes the newest frame for a key immediately and returns it, or `null` when a later frame
+ * for the same key has already been produced. A key is a few milliseconds of work and the HID
+ * writer is idle until the image is queued, so encoding straight away is what lets a burst of
+ * draws land on the module at once. It must not wait for a turn: the previous version queued
+ * frames and yielded with `setImmediate` before each encode, so every draw in a burst waited
+ * for all the encodes ahead of it.
+ */
+export class LatestJpegEncoder {
+	private readonly latest = new Map<string, object>()
+
+	/** Registers the frame before reading it, so a draw that starts mid-encode wins. */
+	encode(key: string, frame: JpegFrame): Buffer | null {
+		const ticket = {}
+		this.latest.set(key, ticket)
+		const startedAt = now()
+		const jpeg = encodeRgbJpeg(frame.rgb, frame.width, frame.height)
+		time('encode ms', startedAt, 30)
+		count('jpeg bytes', jpeg.length)
+		if (this.latest.get(key) !== ticket) {
+			return null
+		}
+		this.latest.delete(key)
+		return jpeg
+	}
 }

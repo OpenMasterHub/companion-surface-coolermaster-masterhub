@@ -6,6 +6,7 @@ export class KeyImageQueue {
 	private readonly pending = new Map<number, Uint8Array>()
 	private active: { control: number; jpeg: Uint8Array; reports: Uint8Array[]; next: number } | null = null
 
+	/** Replaces any JPEG that has not started transferring yet. */
 	store(control: number, jpeg: Uint8Array): void {
 		this.pending.set(control, jpeg)
 	}

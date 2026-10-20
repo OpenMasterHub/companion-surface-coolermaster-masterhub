@@ -14,6 +14,10 @@ Companion remembers buttons by grid position, so moving a module moves which but
 
 With the keypad connected, pincode entry uses the first ten keys as digits 0 through 9. While the surface is locked, the keys and the dial are cleared.
 
+### Debug logging
+
+Start Companion with `MASTERHUB_DEBUG=1` to have the surface log draw, JPEG encoding, and USB transfer timings to the Companion log once per second, plus a line for any step slower than its budget. It is off by default and applies to all MasterHub surfaces; with it off, the surface only logs USB errors.
+
 ### LEDs
 
 A knob, slider, or dial cell takes its color from the button style on that cell and shows a solid color. LED effect modes (breathing, strobe, rainbow, and the rest) are actions on the MasterHub connection module and need `masterhubd`.

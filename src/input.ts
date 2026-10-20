@@ -57,7 +57,9 @@ export function mapDaemonEvent(
 	if (event.action === 'knob_rotated' && model === 'M0064' && id === 'base' && control === 0) {
 		return rotate('dial', detent(payload?.direction, 'cw', 'ccw'), controls)
 	}
-	if (event.action === 'roller_rotated' && model === 'M032LE' && id === 'rollers' && control >= 0 && control <= 1) {
+	// The surface emits its own roller events, so only the model is pinned; `rotate` still
+	// drops a control index that has no cell.
+	if (event.action === 'roller_rotated' && model === 'M032LE' && control >= 0 && control <= 1) {
 		return rotate(`roller/${control}`, detent(payload?.direction, 'up', 'down'), controls)
 	}
 	if (event.action === 'slider_moved' && model === 'M005S' && id === 'faders' && control >= 0 && control <= 4) {

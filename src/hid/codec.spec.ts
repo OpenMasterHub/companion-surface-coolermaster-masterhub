@@ -11,7 +11,16 @@ import {
 	softwareModeFeature,
 	KEY_COUNT,
 } from './keys.js'
-import { encodeLed, inputReport, knobControl, knobLedIndex, LED_BASE, LED_KNOB, LED_SLIDER } from './m0.js'
+import {
+	encodeLed,
+	inputReport,
+	knobControl,
+	knobLedIndex,
+	looseRollerReport,
+	LED_BASE,
+	LED_KNOB,
+	LED_SLIDER,
+} from './m0.js'
 import { jpegDimensions } from '../jpeg-size.js'
 
 function envelope(channel: number, payload: number[]): Uint8Array {
@@ -144,6 +153,18 @@ void describe('M0 modules', () => {
 			type: 'sliders',
 			values: [1, 2, 3, 4, 5],
 		})
+	})
+
+	void it('reads a roller frame its length header does not describe', () => {
+		// Header claims one byte, but the two rollers report 0xff (unchanged) and down.
+		const ragged = Uint8Array.from([0x01, 0x2a, 0x01, 0x00, 0xff, 0x01, 0x00, 0x00])
+		assert.equal(inputReport(ragged), null)
+		assert.deepEqual(looseRollerReport(ragged), { type: 'rollers', turns: [[1, false]] })
+		// A length that overruns the report is also recovered from the first two payload bytes.
+		const short = Uint8Array.from([0x01, 0x2a, 0x09, 0x00, 0x00, 0xff])
+		assert.equal(inputReport(short), null)
+		assert.deepEqual(looseRollerReport(short), { type: 'rollers', turns: [[0, true]] })
+		assert.equal(looseRollerReport(envelope(0x2a, [0x02, 0x05, 0x33, 0x00, 0x64, 0x19, 0x4b])), null)
 	})
 
 	void it('ignores the base heartbeat and an out-of-range slider', () => {

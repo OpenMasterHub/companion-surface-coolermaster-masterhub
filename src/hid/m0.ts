@@ -96,10 +96,20 @@ function parsePayload(payload: Uint8Array): InputReport | null {
 			values: [sliders[0] ?? 0, sliders[1] ?? 0, sliders[2] ?? 0, sliders[3] ?? 0, sliders[4] ?? 0],
 		}
 	}
-	if (payload.length === 2 && payload.every((byte) => byte === 0x00 || byte === 0x01 || byte === NO_CHANGE)) {
+	// Some roller frames omit the inner report header and are just the two direction bytes.
+	if (payload.length === 2 && payload.every((byte) => isRollerByte(byte))) {
 		return { type: 'rollers', turns: directions(payload, false) }
 	}
 	return null
+}
+
+/**
+ * Rollers send a direction byte or `0xff`. Encoders sometimes report a turn with no detent
+ * position, which arrives as `0x7f`; treating it as a turn keeps the roller usable instead of
+ * dropping the report, and the `0x7f` frame itself contributes nothing.
+ */
+function isRollerByte(byte: number): boolean {
+	return byte === 0x00 || byte === 0x01 || byte === NO_CHANGE || byte === 0x7f
 }
 
 function body(payload: Uint8Array, id: number, count: number): Uint8Array | null {
@@ -117,6 +127,22 @@ function directions(bytes: Uint8Array, clockwise: boolean): Array<[number, boole
 		}
 	})
 	return turns
+}
+
+/**
+ * Roller input when the envelope does not describe the payload. The module sends one value per
+ * roller, so the first two bytes after the envelope header are read as directions and any
+ * trailing bytes are padding or an unknown field.
+ */
+export function looseRollerReport(report: Uint8Array): InputReport | null {
+	if (report.length < 6 || report[0] !== 0x01 || report[1] !== INPUT_CHANNEL) {
+		return null
+	}
+	const payload = report.subarray(4, 6)
+	if (!payload.every((byte) => isRollerByte(byte))) {
+		return null
+	}
+	return { type: 'rollers', turns: directions(payload, false) }
 }
 
 export function encodeLed(module: number, command: LedCommand): Uint8Array {

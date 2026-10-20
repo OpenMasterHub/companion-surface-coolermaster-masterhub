@@ -7,8 +7,9 @@ import type {
 	SurfacePincodeMap,
 	SurfaceRegisterProps,
 } from '@companion-surface/base'
+import { count } from './debug.js'
 import { mapDaemonEvent, SliderMemory, type DaemonEvent } from './input.js'
-import { blackJpeg, encodeRgbJpeg } from './jpeg.js'
+import { blackJpeg, LatestJpegEncoder } from './jpeg.js'
 
 import type { GridControl, SurfaceGrid } from './layout.js'
 
@@ -21,16 +22,21 @@ const DIAL_SIZE = 240
 
 export class MasterHubUsbSurface implements SurfaceInstance {
 	readonly productName = 'MasterHub'
+	readonly surfaceId: string
+	private readonly grid: SurfaceGrid
+	private readonly context: SurfaceContext
+	private readonly link: UsbLink
+	private readonly onClose: () => void
 	private readonly sliders = new SliderMemory()
 	private readonly controlIds: ReadonlySet<string>
+	private readonly encoder = new LatestJpegEncoder()
 
-	constructor(
-		readonly surfaceId: string,
-		private readonly grid: SurfaceGrid,
-		private readonly context: SurfaceContext,
-		private readonly link: UsbLink,
-		private readonly onClose: () => void,
-	) {
+	constructor(surfaceId: string, grid: SurfaceGrid, context: SurfaceContext, link: UsbLink, onClose: () => void) {
+		this.surfaceId = surfaceId
+		this.grid = grid
+		this.context = context
+		this.link = link
+		this.onClose = onClose
 		this.controlIds = new Set(grid.controls.map((control) => control.id))
 	}
 
@@ -61,14 +67,27 @@ export class MasterHubUsbSurface implements SurfaceInstance {
 		if (signal.aborted) {
 			return
 		}
+		count('draw calls')
 		const control = this.grid.controls.find((item) => item.id === drawProps.controlId)
 		if (!control) {
 			return
 		}
 		const size = bitmapSize(control)
 		if (size && drawProps.image && drawProps.image.length >= size * size * 3) {
-			const encoded = encodeRgbJpeg(drawProps.image, size, size)
-			if (!signal.aborted && jpegMatching(encoded, size)) {
+			const encoded = this.encoder.encode(control.id, {
+				rgb: drawProps.image,
+				width: size,
+				height: size,
+			})
+			if (!encoded) {
+				count('draw superseded')
+				return
+			}
+			if (signal.aborted) {
+				count('draw aborted before send')
+				return
+			}
+			if (jpegMatching(encoded, size)) {
 				this.sendJpeg(control, encoded)
 			}
 		}

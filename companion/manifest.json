@@ -1,8 +1,8 @@
 {
 	"type": "surface",
 	"id": "masterhub-usb",
-	"name": "MasterHub USB",
-	"shortname": "MasterHub USB",
+	"name": "Cooler Master MasterHub",
+	"shortname": "MasterHub",
 	"description": "Use a MasterHub as a Companion surface over direct USB, without masterhubd",
 	"version": "0.1.0",
 	"license": "MIT",

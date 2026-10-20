@@ -53,6 +53,20 @@ void test('keys, knobs, the dial, and rollers become presses and detents', () =>
 	)
 })
 
+void test('a roller turn survives a different module id and a cell that is missing', () => {
+	const sliders = new SliderMemory()
+	const payload = { model: 'M032LE' }
+	assert.deepEqual(
+		mapDaemonEvent(event('roller_rotated', { module: payload, control: 0, direction: 'down' }), sliders, controls),
+		{ controlId: 'roller/0', delta: -1 },
+	)
+	// Roller 1 has no cell here, so the turn is dropped instead of pressing something else.
+	assert.equal(
+		mapDaemonEvent(event('roller_rotated', { module: payload, control: 1, direction: 'up' }), sliders, controls),
+		null,
+	)
+})
+
 void test('the first slider sample does not rotate', () => {
 	const sliders = new SliderMemory()
 	const payload = { module: { model: 'M005S', id: 'faders' }, control: 2 }
