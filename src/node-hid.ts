@@ -34,8 +34,22 @@ export function listPids(): number[] {
 	return listHid().map((device) => device.productId)
 }
 
+/**
+ * `readStart`/`readStop` live on the native handle: `node-hid` only republishes the methods that
+ * existed when it wrote its wrapper, so the typed `HIDAsync` does not carry them.
+ */
+interface NativeHid extends HIDAsync {
+	readStart(onReport: (error: Error | null, data?: Buffer) => void): Promise<void>
+	readStop(): Promise<void>
+}
+
+interface AsyncHid extends HIDAsync {
+	_raw: NativeHid
+}
+
 export async function openHid(path: string): Promise<HidPort> {
-	const device: HIDAsync = await loadHid().HIDAsync.open(path)
+	const device = (await loadHid().HIDAsync.open(path)) as unknown as AsyncHid
+	const native = device._raw
 	return {
 		async write(data: Uint8Array): Promise<void> {
 			await device.write(Buffer.from(data))
@@ -43,12 +57,17 @@ export async function openHid(path: string): Promise<HidPort> {
 		async sendFeatureReport(data: Uint8Array): Promise<void> {
 			await device.sendFeatureReport(Buffer.from(data))
 		},
-		async read(timeoutMs: number): Promise<Uint8Array | null> {
-			const data = await device.read(timeoutMs)
-			if (!data || data.length === 0) {
-				return null
-			}
-			return new Uint8Array(data)
+		/**
+		 * `node-hid` keeps one long-lived reader thread per module. It is what makes writes fast:
+		 * the thread sits in `hid_read_timeout`, off libuv's pool, where a one-shot read would
+		 * hold a pool thread for its whole timeout and delay every write behind it.
+		 */
+		async readStart(onReport: (report: Uint8Array) => void): Promise<void> {
+			await native.readStart((error, data) => {
+				if (!error && data && data.length > 0) {
+					onReport(new Uint8Array(data))
+				}
+			})
 		},
 		async close(): Promise<void> {
 			await device.close()

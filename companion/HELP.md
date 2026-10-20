@@ -1,23 +1,36 @@
-## MasterHub USB surface
+### What appears
 
-This surface opens the MasterHub over USB and does not use `masterhubd`. No connection is added; the modules appear when they are plugged in. Quit `masterhubd` and close OpenDeck first, because they open the same USB devices.
+Every connected MasterHub module (keypad, sliders, knobs, rollers, dial, base) shows up as one **MasterHub** surface. There is no device to add by IP or serial: the surface appears when you plug a module in and goes away when you remove all of them.
 
-The surface appears when a keypad, knob, roller, slider, or dial module is plugged in. The base on its own appears as one color control. Hot-plugging a module reopens the surface.
+### Buttons
 
-Companion draws the 15 keys at 72×72 and the dial at 240×240. The surface brightness control is the keypad backlight and the knob, slider, and base LEDs together.
+| Module  | Controls                                      | Each cell shows      |
+| ------- | --------------------------------------------- | -------------------- |
+| Keypad  | 15 keys, rows 0–2                             | 72×72 button image   |
+| Sliders | 5 sliders, row 3                              | LED color            |
+| Knobs   | 3 knobs, and the 2 rollers beside them, row 4 | LED color            |
+| Dial    | the dial, row 5                               | 240×240 button image |
+| Base    | 1 cell, row 5                                 | LED color            |
 
-### Layout
+- The grid is fixed, so a missing module leaves a gap instead of moving the modules around it. The surface remembers buttons by grid position: an empty cell is still where its button lives when the module comes back.
+- Slider 1 is the leftmost slider in Companion.
+- On knob, slider, and base cells the button style's color is sent to the LED as a solid color. Animated styles (breathing, strobe, rainbow, …) are not shown on these LEDs.
+- **Brightness** in the surface settings sets the keypad backlight and the knob, slider, and base LEDs together.
 
-Controls stack: keys, rollers, sliders, then the knobs beside the dial. A base-only setup is a single color cell. Pogo-site placement is not available over USB.
+### Sliders
 
-Companion remembers buttons by grid position, so moving a module moves which buttons it presses. Roller hardware control 0 is the right roller. Slider moves become encoder turns, and the first reading after connect only stores the position. Each slider also publishes `slider_0` through `slider_4` as a value from 0 to 100.
+Moving a slider also counts as turning the encoder on its cell, so an encoder button there reacts to slider movement. The first reading after connecting only records the position, so plugging in does not turn the encoder.
 
-With the keypad connected, pincode entry uses the first ten keys as digits 0 through 9. While the surface is locked, the keys and the dial are cleared.
+Each slider also publishes a variable you can use in triggers and feedbacks:
 
-### Debug logging
+| Variable               | Slider    |
+| ---------------------- | --------- |
+| `$(internal:slider_1)` | leftmost  |
+| …                      |           |
+| `$(internal:slider_5)` | rightmost |
 
-Start Companion with `MASTERHUB_DEBUG=1` to have the surface log draw, JPEG encoding, and USB transfer timings to the Companion log once per second, plus a line for any step slower than its budget. It is off by default and applies to all MasterHub surfaces; with it off, the surface only logs USB errors.
+The value runs from 0 to 100.
 
-### LEDs
+### Keyboard lock
 
-A knob, slider, or dial cell takes its color from the button style on that cell and shows a solid color. LED effect modes (breathing, strobe, rainbow, and the rest) are actions on the MasterHub connection module and need `masterhubd`.
+When Companion's surface is locked, the keypad's first ten keys type the PIN digits 0–9 and the keys and dial are blanked until you unlock, so they do not show the buttons underneath.

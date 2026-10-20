@@ -1,4 +1,4 @@
-import { count, isDebugEnabled, now, time } from './debug.js'
+import { count, now, time } from './debug.js'
 import type { DaemonEvent } from './input.js'
 
 import type { HidIdentity } from './discover.js'
@@ -18,20 +18,13 @@ import {
 } from './hid/m0.js'
 import { BacklightQueue, KeyImageQueue, LedQueue, ScreenQueue } from './hid/queue.js'
 
-/**
- * How long one read waits for input. Reads only run while a module has nothing to write, so
- * this timeout does not slow transfers; it bounds how long `close` waits and how stale a
- * module can be about new reports. Debug logging times each read, so it samples more finely.
- */
-function readTimeoutMs(): number {
-	return isDebugEnabled() ? 20 : 50
-}
 const WATCH_MS = 1000
 
 export interface HidPort {
 	write(data: Uint8Array): Promise<void>
 	sendFeatureReport(data: Uint8Array): Promise<void>
-	read(timeoutMs: number): Promise<Uint8Array | null>
+	/** Runs `onReport` for each input report until `close`. */
+	readStart(onReport: (report: Uint8Array) => void): Promise<void>
 	close(): Promise<void>
 }
 
@@ -41,11 +34,15 @@ export interface HidOpener {
 
 interface OpenModule {
 	productId: number
-	port: HidPort
+	/** `null` while the module is unplugged and being reopened. */
+	port: HidPort | null
+	path: string
 	/** Set while this module has reports to write. */
 	writing: boolean
-	/** Resolves the read loop's wait for `writing` to clear. */
-	wake: (() => void) | null
+}
+
+async function delay(ms: number): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function chunkCount(jpeg: Uint8Array): number {
@@ -64,18 +61,18 @@ export class UsbLink {
 	private readonly sliderValues: Array<number | null> = [null, null, null, null, null]
 	private dialPressed = false
 	private modules: OpenModule[] = []
-	private openPids: number[] = []
 	private stopping = false
 	private closed = false
+	private watching = false
 	private timer: ReturnType<typeof setInterval> | null = null
 	private readonly opener: HidOpener
-	private readonly listPids: () => number[]
+	private readonly listDevices: () => HidIdentity[]
 	private onEvent: ((event: DaemonEvent) => void) | null = null
 	private onLost: ((error: Error) => void) | null = null
 
-	constructor(opener: HidOpener, listPids: () => number[]) {
+	constructor(opener: HidOpener, listDevices: () => HidIdentity[]) {
 		this.opener = opener
-		this.listPids = listPids
+		this.listDevices = listDevices
 	}
 
 	setHandlers(onEvent: (event: DaemonEvent) => void, onLost: (error: Error) => void): void {
@@ -87,17 +84,16 @@ export class UsbLink {
 		const opened: OpenModule[] = []
 		try {
 			for (const device of devices) {
-				const port = await this.opener.open(device.path)
-				opened.push({ productId: device.productId, port, writing: false, wake: null })
-				if (device.productId === PID_KEYS) {
-					await port.sendFeatureReport(softwareModeFeature())
+				const module: OpenModule = {
+					productId: device.productId,
+					path: device.path,
+					port: await this.opener.open(device.path),
+					writing: false,
 				}
-				if (device.productId === PID_DIAL) {
-					await port.sendFeatureReport(dialSoftwareModeFeature())
-				}
+				opened.push(module)
 			}
 		} catch (error) {
-			await Promise.all(opened.map(async (module) => module.port.close().catch(() => undefined)))
+			await Promise.all(opened.map(async (module) => module.port?.close().catch(() => undefined)))
 			const detail = error instanceof Error ? error.message : String(error)
 			throw new Error(
 				`Could not open MasterHub USB. Quit masterhubd and any other program using the device. ${detail}`,
@@ -108,13 +104,19 @@ export class UsbLink {
 			throw new Error('No MasterHub modules to open')
 		}
 		this.modules = opened
-		this.openPids = opened.map((module) => module.productId).sort((left, right) => left - right)
 	}
 
-	start(): void {
+	/**
+	 * Starts input on every module, then the writers. Input starts first so `start` never leaves a
+	 * module without a reader, which is also what keeps writes fast: a module with a reader waiting
+	 * in `hid_read_timeout` does not hold a libuv pool thread, so a write does not queue behind it.
+	 */
+	async start(): Promise<void> {
+		for (const module of this.modules) {
+			await this.startModule(module)
+		}
 		for (const module of this.modules) {
 			void this.writeLoop(module)
-			void this.readLoop(module)
 		}
 		this.timer = setInterval(() => this.watch(), WATCH_MS)
 	}
@@ -129,7 +131,7 @@ export class UsbLink {
 			clearInterval(this.timer)
 			this.timer = null
 		}
-		await Promise.all(this.modules.map(async (module) => module.port.close().catch(() => undefined)))
+		await Promise.all(this.modules.map(async (module) => module.port?.close().catch(() => undefined)))
 	}
 
 	setBrightness(percent: number): void {
@@ -189,29 +191,30 @@ export class UsbLink {
 	}
 
 	/**
-	 * Drains every queued report back to back. A read outstanding on the same handle makes
-	 * each write wait on libuv's thread pool: a full page took 250 ms per report with one
-	 * read in flight and 1 ms per report with none. So the read loop stands down while
-	 * `writing` is set; the module sends no input during a transfer anyway. The writer only
-	 * yields when the queue is empty.
+	 * Drains every queued report back to back, then yields when the queue is empty. Writes go
+	 * through libuv's pool, so they need no coordination with input: see {@link start}.
 	 */
 	private async writeLoop(module: OpenModule): Promise<void> {
 		try {
 			while (!this.stopping) {
 				const output = this.nextOutput(module.productId)
-				if (!output) {
+				const port = module.port
+				if (!output || !port) {
 					module.writing = false
-					module.wake?.()
-					await this.idle()
+					if (!port) {
+						await delay(WATCH_MS)
+					} else {
+						await this.idle()
+					}
 					continue
 				}
 				module.writing = true
 				const startedAt = now()
 				try {
 					if (output.feature) {
-						await module.port.sendFeatureReport(output.bytes)
+						await port.sendFeatureReport(output.bytes)
 					} else {
-						await module.port.write(output.bytes)
+						await port.write(output.bytes)
 					}
 				} catch (error) {
 					count('write errors')
@@ -230,40 +233,22 @@ export class UsbLink {
 		}
 	}
 
-	private async readLoop(module: OpenModule): Promise<void> {
-		try {
-			while (!this.stopping) {
-				if (module.writing) {
-					await this.waitUntilIdle(module)
-					continue
-				}
-				const startedAt = now()
-				const report = await module.port.read(readTimeoutMs())
-				if (report && report.length > 0) {
-					time('read ms', startedAt, 5)
-					this.onReport(module.productId, report)
-				}
-			}
-		} catch (error) {
-			if (!this.stopping) {
-				console.log(
-					`[MasterHub] pid ${module.productId}: read loop failed: ${error instanceof Error ? error.message : String(error)}`,
-				)
-				this.fail(error)
-			}
+	/** Opens the module's port, starts its input, and enables it where the firmware needs it. */
+	private async startModule(module: OpenModule): Promise<void> {
+		const port = module.port ?? (await this.opener.open(module.path))
+		await port.readStart((report) => this.onReport(module.productId, report))
+		module.port = port
+		if (module.productId === PID_KEYS) {
+			await port.sendFeatureReport(softwareModeFeature())
+		}
+		if (module.productId === PID_DIAL) {
+			await port.sendFeatureReport(dialSoftwareModeFeature())
 		}
 	}
 
 	/** Yields to the event loop while there is nothing to write, so the loop cannot spin. */
 	private async idle(): Promise<void> {
 		await new Promise<void>((resolve) => setImmediate(resolve))
-	}
-
-	/** Blocks the read loop until the module's writer has drained its queue. */
-	private async waitUntilIdle(module: OpenModule): Promise<void> {
-		await new Promise<void>((resolve) => {
-			module.wake = resolve
-		})
 	}
 
 	private nextOutput(productId: number): { feature: boolean; bytes: Uint8Array } | null {
@@ -408,18 +393,88 @@ export class UsbLink {
 		this.onEvent?.(event)
 	}
 
+	/**
+	 * Runs on a timer. Companion fixes a surface's controls when it opens, so a module that is
+	 * unplugged is closed and left out until it comes back, then reopened in place: other modules
+	 * keep their readers and writes, instead of the whole surface failing.
+	 */
 	private watch(): void {
-		if (this.stopping) {
+		if (this.stopping || this.watching) {
 			return
 		}
-		let present: number[]
+		this.watching = true
+		void this.refreshModules()
+			.catch((error: unknown) => {
+				console.log(`[MasterHub] module refresh failed: ${error instanceof Error ? error.message : String(error)}`)
+			})
+			.finally(() => {
+				this.watching = false
+			})
+	}
+
+	private async refreshModules(): Promise<void> {
+		let present: HidIdentity[]
 		try {
-			present = [...this.listPids()].sort((left, right) => left - right)
+			present = this.listDevices()
 		} catch {
 			return
 		}
-		if (present.join(',') !== this.openPids.join(',')) {
-			this.fail(new Error('MasterHub modules changed'))
+		for (const module of this.modules) {
+			const device = present.find((item) => item.productId === module.productId)
+			if (!device && module.port) {
+				const port = module.port
+				module.port = null
+				await port.close().catch(() => undefined)
+				if (module.productId === PID_KEYS) {
+					this.keyState.fill(false)
+				}
+				if (module.productId === PID_KNOB) {
+					this.knobPressed.fill(false)
+				}
+				if (module.productId === PID_DIAL) {
+					this.dialPressed = false
+				}
+				continue
+			}
+			if (device && !module.port) {
+				module.path = device.path
+				try {
+					await this.startModule(module)
+					this.repaint(module.productId)
+				} catch (error) {
+					module.port = null
+					console.log(
+						`[MasterHub] pid ${module.productId}: reopen failed: ${error instanceof Error ? error.message : String(error)}`,
+					)
+				}
+			}
+		}
+	}
+
+	/** Queues the current frame or colour again, so a module that was reopened is not left blank. */
+	private repaint(productId: number): void {
+		if (productId === PID_KEYS) {
+			this.backlight.restore()
+			for (const [control, jpeg] of this.keys.snapshot()) {
+				this.keys.store(control, jpeg)
+			}
+			return
+		}
+		if (productId === PID_DIAL) {
+			const jpeg = this.screen.shownFrame()
+			if (jpeg) {
+				this.screen.store(jpeg)
+			}
+			return
+		}
+		if (productId === PID_KNOB) {
+			this.knobLeds.restore()
+		}
+		if (productId === PID_SLIDER) {
+			this.sliderLeds.restore()
+		}
+		if (productId === PID_BASE) {
+			this.baseLeds.restore()
 		}
 	}
 

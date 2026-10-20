@@ -139,7 +139,7 @@ export class MasterHubUsbSurface implements SurfaceInstance {
 			this.context.rotateById(mapped.controlId, mapped.delta)
 		}
 		if (mapped.slider !== undefined && mapped.controlId.startsWith('slider/')) {
-			this.context.sendVariableValue(`slider_${mapped.controlId.slice('slider/'.length)}`, mapped.slider)
+			this.context.sendVariableValue(`slider_${Number(mapped.controlId.slice('slider/'.length)) + 1}`, mapped.slider)
 		}
 	}
 
@@ -157,7 +157,7 @@ export class MasterHubUsbSurface implements SurfaceInstance {
 export function registerProps(grid: SurfaceGrid): SurfaceRegisterProps {
 	const transferVariables: SurfaceInputVariable[] = grid.hasSliders
 		? [0, 1, 2, 3, 4].map((index) => ({
-				id: `slider_${index}`,
+				id: `slider_${index + 1}`,
 				type: 'input' as const,
 				name: `Slider ${index + 1}`,
 				description: 'Slider position from 0 to 100',

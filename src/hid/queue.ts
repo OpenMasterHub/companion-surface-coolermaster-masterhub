@@ -11,6 +11,16 @@ export class KeyImageQueue {
 		this.pending.set(control, jpeg)
 	}
 
+	/** The frame each key last showed, including one still transferring. */
+	snapshot(): Array<[number, Uint8Array]> {
+		const frames = [...this.pending.entries()]
+		const active = this.active
+		if (active && !this.pending.has(active.control)) {
+			frames.push([active.control, active.jpeg])
+		}
+		return frames
+	}
+
 	/** One output report. A newer JPEG for the active key replaces the transfer. */
 	nextChunk(): Uint8Array | null {
 		if (this.active) {
@@ -50,6 +60,11 @@ export class ScreenQueue {
 		this.pending = jpeg
 	}
 
+	/** The frame the dial last showed, or is about to show. */
+	shownFrame(): Uint8Array | null {
+		return this.pending ?? this.shown
+	}
+
 	/** Finishes the current frame, then starts the newest JPEG when it differs. */
 	nextChunk(): Uint8Array | null {
 		if (!this.active) {
@@ -76,6 +91,8 @@ export class ScreenQueue {
 
 export class BacklightQueue {
 	private latest: number | null = null
+	/** The last brightness sent, so a reopened keypad can get it again. */
+	private shown: number | null = null
 
 	store(brightness: number): void {
 		this.latest = brightness
@@ -87,7 +104,15 @@ export class BacklightQueue {
 		}
 		const brightness = this.latest
 		this.latest = null
+		this.shown = brightness
 		return backlightFeature(brightness)
+	}
+
+	/** Queues the last brightness again, for a keypad that was reopened. */
+	restore(): void {
+		if (this.shown !== null) {
+			this.latest = this.shown
+		}
 	}
 }
 
@@ -100,6 +125,8 @@ interface PendingLed {
 export class LedQueue {
 	private readonly pending: PendingLed[] = []
 	private readonly module: number
+	/** The newest command for each index and kind, so a reopened module can be redrawn. */
+	private readonly latest = new Map<string, LedCommand>()
 
 	constructor(module: number) {
 		this.module = module
@@ -118,8 +145,16 @@ export class LedQueue {
 		return this.pending.shift()?.report ?? null
 	}
 
+	/** Queues the last command of every index again. */
+	restore(): void {
+		for (const command of this.latest.values()) {
+			this.pending.push({ kind: command.kind, index: command.index, report: encodeLed(this.module, command) })
+		}
+	}
+
 	private store(command: LedCommand): void {
 		const report = encodeLed(this.module, command)
+		this.latest.set(`${command.kind}:${command.index}`, command)
 		const slot = this.pending.findIndex((item) => item.kind === command.kind && item.index === command.index)
 		const pending = { kind: command.kind, index: command.index, report }
 		if (slot >= 0) {

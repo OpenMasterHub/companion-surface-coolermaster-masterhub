@@ -21,7 +21,7 @@ The plugin opens the MasterHub HID devices itself. Every connected module (keypa
 - **Keys and dial** show button images. Companion draws the dial at 240×240.
 - **Knobs, sliders, rollers, and base** are encoder-style controls without a screen. A button placed on that cell supplies its color as a solid LED color. LED _animations_ (breathing, strobe, rainbow, …) are not supported.
 - **Brightness** in Companion's surface settings drives the keypad backlight and the knob, slider, and base LEDs together.
-- **Sliders** also publish `slider_0` … `slider_4` to Companion as values from 0 to 100. Slider movement is sent as encoder turns; the first reading after connecting only stores the position, so connecting does not turn the encoder.
+- **Sliders** also publish `slider_1` … `slider_5` to Companion as values from 0 to 100. Slider movement is sent as encoder turns; the first reading after connecting only stores the position, so connecting does not turn the encoder.
 - **Pincode entry** on a locked Companion uses the first ten keys of the keypad as digits 0–9. While locked, keys and dial are blanked.
 
 ## Layout
@@ -33,7 +33,9 @@ Companion remembers buttons by grid position, so the surface is a fixed grid and
 - row 4: 3 knobs and the 2 rollers
 - row 5: the dial and the base
 
-A base-only setup is a single color cell. The stacked layout is always used because the USB surface has no pogo-site information; moving a module to a different place in the chassis does not move its cells (and therefore its buttons). Hot-plugging a module reopens the surface and picks up the new set of controls.
+A base-only setup is a single color cell. The stacked layout is always used because the USB surface has no pogo-site information; moving a module to a different place in the chassis does not move its cells (and therefore its buttons).
+
+The controls are fixed when the surface opens. Unplugging a module keeps the surface and the other modules running and leaves its cells blank; its input and last image or color are picked up again when it is plugged back in. Adding a module that was not present when the surface opened needs the surface to be reopened.
 
 ## Development
 
